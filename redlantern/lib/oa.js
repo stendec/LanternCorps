@@ -28,7 +28,9 @@
 // System Requirements
 var sys = require('sys'),
 	net = require('net'),
-	crypto = require('crypto');
+	crypto = require('crypto'),
+	fs = require('fs'),
+	tls = require('tls');
 
 // Other Requirements
 var menu = require('./menu');
@@ -52,7 +54,23 @@ var Oa = function Oa(data,ver) {
 	sys.log('Oa - Initializing...');
 	
 	var oa = this;
-	this.server = net.createServer(function(stream){oa.newStream(stream);});
+	if(data.general.ssl_cert !== undefined &&
+		data.general.ssl_key !== undefined) {
+                this.tls = true;
+
+		sys.log('Oa - TLS enabled.');
+		var tls_options = {
+			key: fs.readFileSync(data.general.ssl_key),
+			cert: fs.readFileSync(data.general.ssl_cert),
+		};
+                if(data.general.ssl_ca !== undefined) {
+			tls_options.ca = fs.readFileSync(data.general.ssl_ca);
+		}
+
+		this.server = tls.createServer(tls_options,function(stream,enc_stream){oa.newStream(stream);});
+        } else {
+		this.server = net.createServer(function(stream){oa.newStream(stream);});
+        }
 };
 Oa.stream_id = 0;
 Oa.connections = 0;
@@ -472,6 +490,7 @@ var parseHeader = function parseHeader(stream) {
 	// Check for the Upgrade header. If it doesn't exist, then we can't handle
 	// this request. Output an error and quit.
 	if (headers['Upgrade'] === undefined) {
+		sys.log('St.' + stream.id + ' - Bad Request. Aborting.');
 		var body = ['<!DOCTYPE html>'];
 		body.push('<html>');
 		body.push('\t<head>');
@@ -521,7 +540,7 @@ var parseHeader = function parseHeader(stream) {
 	
 	// Check for the Host header.
 	if ( headers['Host'] !== undefined ) {
-		stream.loc = 'ws://' + headers['Host'] + '/' + stream.path; }
+		stream.loc = 'ws' + (stream.Oa.tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
 	
 	// The Origin header.
 	if ( headers['Origin'] !== undefined ) {
