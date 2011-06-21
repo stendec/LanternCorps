@@ -57,6 +57,7 @@ var Oa = function Oa(data,ver) {
 	if(data.general.ssl_cert !== undefined &&
 		data.general.ssl_key !== undefined &&
 		data.general.ssl_ca !== undefined) {
+                this.tls = true;
 		sys.log('Oa - TLS enabled.');
 		var tls_options = {
 			key: fs.readFileSync(data.general.ssl_key),
@@ -486,6 +487,7 @@ var parseHeader = function parseHeader(stream) {
 	// Check for the Upgrade header. If it doesn't exist, then we can't handle
 	// this request. Output an error and quit.
 	if (headers['Upgrade'] === undefined) {
+		sys.log('St.' + stream.id + ' - Bad Request. Aborting.');
 		var body = ['<!DOCTYPE html>'];
 		body.push('<html>');
 		body.push('\t<head>');
@@ -535,7 +537,7 @@ var parseHeader = function parseHeader(stream) {
 	
 	// Check for the Host header.
 	if ( headers['Host'] !== undefined ) {
-		stream.loc = 'ws://' + headers['Host'] + '/' + stream.path; }
+		stream.loc = 'ws' + (stream.Oa.tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
 	
 	// The Origin header.
 	if ( headers['Origin'] !== undefined ) {
