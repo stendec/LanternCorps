@@ -55,15 +55,18 @@ var Oa = function Oa(data,ver) {
 	
 	var oa = this;
 	if(data.general.ssl_cert !== undefined &&
-		data.general.ssl_key !== undefined &&
-		data.general.ssl_ca !== undefined) {
+		data.general.ssl_key !== undefined) {
                 this.tls = true;
+
 		sys.log('Oa - TLS enabled.');
 		var tls_options = {
 			key: fs.readFileSync(data.general.ssl_key),
 			cert: fs.readFileSync(data.general.ssl_cert),
-			ca: fs.readFileSync(data.general.ssl_ca)
 		};
+                if(data.general.ssl_ca !== undefined) {
+			tls_options.ca = fs.readFileSync(data.general.ssl_ca);
+		}
+
 		this.server = tls.createServer(tls_options,function(stream,enc_stream){oa.newStream(stream);});
         } else {
 		this.server = net.createServer(function(stream){oa.newStream(stream);});
