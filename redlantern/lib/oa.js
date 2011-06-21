@@ -28,7 +28,9 @@
 // System Requirements
 var sys = require('sys'),
 	net = require('net'),
-	crypto = require('crypto');
+	crypto = require('crypto'),
+	fs = require('fs'),
+	tls = require('tls');
 
 // Other Requirements
 var menu = require('./menu');
@@ -52,7 +54,19 @@ var Oa = function Oa(data,ver) {
 	sys.log('Oa - Initializing...');
 	
 	var oa = this;
-	this.server = net.createServer(function(stream){oa.newStream(stream);});
+	if(data.general.ssl_cert !== undefined &&
+		data.general.ssl_key !== undefined &&
+		data.general.ssl_ca !== undefined) {
+		sys.log('Oa - TLS enabled.');
+		var tls_options = {
+			key: fs.readFileSync(data.general.ssl_key),
+			cert: fs.readFileSync(data.general.ssl_cert),
+			ca: fs.readFileSync(data.general.ssl_ca)
+		};
+		this.server = tls.createServer(tls_options,function(stream,enc_stream){oa.newStream(stream);});
+        } else {
+		this.server = net.createServer(function(stream){oa.newStream(stream);});
+        }
 };
 Oa.stream_id = 0;
 Oa.connections = 0;
