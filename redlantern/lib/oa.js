@@ -56,7 +56,6 @@ var Oa = function Oa(data,ver) {
 	var oa = this;
 	if(data.general.ssl_cert !== undefined &&
 		data.general.ssl_key !== undefined) {
-                this.tls = true;
 
 		sys.log('Oa - TLS enabled.');
 		var tls_options = {
@@ -67,7 +66,8 @@ var Oa = function Oa(data,ver) {
 			tls_options.ca = fs.readFileSync(data.general.ssl_ca);
 		}
 
-		this.server = tls.createServer(tls_options,function(stream,enc_stream){oa.newStream(stream);});
+		this.server = tls.createServer(tls_options,function(stream) {oa.newStream(stream);});
+		this.tls = true;
         } else {
 		this.server = net.createServer(function(stream){oa.newStream(stream);});
         }
@@ -77,6 +77,10 @@ Oa.connections = 0;
 
 /** Set up a new stream. */
 Oa.prototype.newStream = function(stream) {
+	if ( this.tls ) {
+		stream.remoteAddress = stream.socket.remoteAddress;
+	}
+
 	if ( this.data.blacklist.indexOf(stream.remoteAddress) !== -1 ) {
 		sys.log('Oa - Blocked connection from '+stream.remoteAddress);
 		stream.destroy();
@@ -99,7 +103,11 @@ Oa.prototype.newStream = function(stream) {
 	stream.on('close', onClose);
 	
 	// Speed stuff up.
-	stream.setNoDelay(true);
+	if ( this.tls ) {
+		stream.socket.setNoDelay(true);
+	} else {
+		stream.setNoDelay(true);
+	}
 	
 	// Bind message
 	stream.message = message.bind(stream);
@@ -111,6 +119,8 @@ Oa.prototype.newStream = function(stream) {
 	stream.state_ws = false;
 	stream.expect_frame = true;
 	stream.buf = '';
+	stream.tls_append = (this.tls ? '\x00' : '');
+	stream.telnet_auto = this.data.general.telnet_auto;
 	
 	// Set a timeout to bust the menu.
 	stream.timer = setTimeout(initialTimeout.bind(stream),2000);
@@ -121,7 +131,12 @@ var initialTimeout = function() {
 	
 	// Still here? Create a menu.
 	if ( !this.proxied && this.state === 0 ) {
-		new menu.Telnet(this);
+		if ( this.telnet_auto ) {
+			var host = this.Oa.findHost();
+			this.connectTo(host.host, host.port);
+		} else {
+			new menu.Telnet(this);
+		}
 		this.state = 1;
 	} else {
 		sys.puts(sys.inspect(this));
@@ -201,7 +216,12 @@ var readInitial = function(data) {
 	// Is it something else?
 	else if ( this.buf.length > 3 && !(this.buf.substr(0,4) === 'GET ') ) {
 		// Show the menu.
-		new menu.Telnet(this);
+		if ( this.telnet_auto ) {
+			var host = this.Oa.findHost();
+			this.connectTo(host.host, host.port);
+		} else {
+			new menu.Telnet(this);
+		}
 		this.state = 1;
 	}
 }
@@ -557,9 +577,6 @@ var parseHeader = function parseHeader(stream) {
 	send_handshake(stream);
 	stream.state_ws = true;
 	
-	// Send a banner.
-	stream.Oa.sendBanner(stream);
-	
 	// Try getting a username and password from the path.
 	var user = undefined, path = stream.path;
 	if ( path.indexOf('@') !== -1 ) {
@@ -596,6 +613,9 @@ var parseHeader = function parseHeader(stream) {
 		}
 	}
 	
+	// Send a banner.
+	stream.Oa.sendBanner(stream);
+	
 	// Still here? Show the menu.
 	var tn = new menu.Telnet(stream,user);
 	stream.state = 1;
@@ -628,7 +648,7 @@ var message = function(data) {
 		if ( typeof data === 'string' ) {
 			this.write(data, 'utf8');
 		} else {
-			this.write(data.toString('binary'),'utf8'); }
+			this.write(data.toString('binary')+this.tls_append,'utf8'); }
 		this.write('\xFF','binary');
 	} else {
 		if ( typeof data === 'string' ) {
