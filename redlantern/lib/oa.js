@@ -66,7 +66,16 @@ var Oa = function Oa(data,ver) {
 			tls_options.ca = fs.readFileSync(data.general.ssl_ca);
 		}
 
-		this.server = tls.createServer(tls_options,function(stream) {oa.newStream(stream);});
+		this.server = tls.createServer(tls_options,function(stream) {
+			stream.do_tls = true;
+			oa.newStream(stream);
+		});
+
+		// Separate non-TLS policy server
+		this.pserver = net.createServer(function(stream) {
+			stream.policy_only = true;
+			oa.newStream(stream);
+		});
 		this.tls = true;
         } else {
 		this.server = net.createServer(function(stream){oa.newStream(stream);});
@@ -77,7 +86,7 @@ Oa.connections = 0;
 
 /** Set up a new stream. */
 Oa.prototype.newStream = function(stream) {
-	if ( this.tls ) {
+	if ( stream.do_tls ) {
 		stream.remoteAddress = stream.socket.remoteAddress;
 	}
 
@@ -103,10 +112,12 @@ Oa.prototype.newStream = function(stream) {
 	stream.on('close', onClose);
 	
 	// Speed stuff up.
-	if ( this.tls ) {
+	if ( stream.do_tls ) {
 		stream.socket.setNoDelay(true);
+		stream.tls_append = '\x00';
 	} else {
 		stream.setNoDelay(true);
+		stream.tls_append = '';
 	}
 	
 	// Bind message
@@ -119,7 +130,6 @@ Oa.prototype.newStream = function(stream) {
 	stream.state_ws = false;
 	stream.expect_frame = true;
 	stream.buf = '';
-	stream.tls_append = (this.tls ? '\x00' : '');
 	stream.telnet_auto = this.data.general.telnet_auto;
 	
 	// Set a timeout to bust the menu.
@@ -201,12 +211,16 @@ var readInitial = function(data) {
 	this.buf += data.toString('binary');
 	
 	// Check Policy File Request.
-	if ( this.buf === '<policy-file-request/>\x00' ) {
+	if ( !this.do_tls && this.buf === '<policy-file-request/>\x00' ) {
 		sys.log('St.' + this.id + ' - Policy File Request');
 		this.Oa.sendPolicyFileRequest(this);
 		this.destroy();
 	}
 	
+	if ( this.policy_only ) {
+		return;
+	}
+
 	// Check WebSocket Header
 	else if ( this.buf.substr(0,4) === 'GET ' && this.buf.indexOf('\r\n\r\n') !== -1 ) {
 		parseHeader(this);
@@ -286,7 +300,14 @@ Oa.prototype.start = function() {
 	if ( this.data.general.ip ) {
 		msg += ' at ' + this.data.general.ip; }
 	msg += ' on port ' + this.data.general.port;
-	
+
+	if ( this.tls ) {
+		var pmsg = 'Oa - Policy Server Listening';
+		if ( this.data.general.ip ) {
+			pmsg += ' at ' + this.data.general.ip; }
+		pmsg += ' on port ' + (this.data.general.policy_port || 843);
+	}
+
 	// Set the max connections for safety and print out some configuration bits.
 	sys.puts(new Array(80).join('-'));
 	if ( this.data.general.connections !== undefined ) {
@@ -299,6 +320,10 @@ Oa.prototype.start = function() {
 	sys.puts(new Array(80).join('-'));
 	this.server.listen(this.data.general.port, this.data.general.ip);
 	sys.log(msg);
+	if ( this.tls ) {
+		this.pserver.listen((this.data.general.policy_port || 843), this.data.general.ip);
+		sys.log(pmsg);
+	}
 }
 
 /** Check to see if a specific Origin is allowed to connect. */
@@ -560,7 +585,7 @@ var parseHeader = function parseHeader(stream) {
 	
 	// Check for the Host header.
 	if ( headers['Host'] !== undefined ) {
-		stream.loc = 'ws' + (stream.Oa.tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
+		stream.loc = 'ws' + (stream.do_tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
 	
 	// The Origin header.
 	if ( headers['Origin'] !== undefined ) {
