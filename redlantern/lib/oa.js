@@ -215,28 +215,24 @@ var readInitial = function(data) {
 		sys.log('St.' + this.id + ' - Policy File Request');
 		this.Oa.sendPolicyFileRequest(this);
 		this.destroy();
-	}
-	
-	if ( this.policy_only ) {
-		return;
-	}
-
-	// Check WebSocket Header
-	else if ( this.buf.substr(0,4) === 'GET ' && this.buf.indexOf('\r\n\r\n') !== -1 ) {
-		parseHeader(this);
-		this.buf = '';
-	}
-	
-	// Is it something else?
-	else if ( this.buf.length > 3 && !(this.buf.substr(0,4) === 'GET ') ) {
-		// Show the menu.
-		if ( this.telnet_auto ) {
-			var host = this.Oa.findHost();
-			this.connectTo(host.host, host.port);
-		} else {
-			new menu.Telnet(this);
+	} else if ( !this.policy_only ) {
+		// Check WebSocket Header
+		if ( this.buf.substr(0,4) === 'GET ' && this.buf.indexOf('\r\n\r\n') !== -1 ) {
+			parseHeader(this);
+			this.buf = '';
 		}
-		this.state = 1;
+		
+		// Is it something else?
+		else if ( this.buf.length > 3 && !(this.buf.substr(0,4) === 'GET ') ) {
+			// Show the menu.
+			if ( this.telnet_auto ) {
+				var host = this.Oa.findHost();
+				this.connectTo(host.host, host.port);
+			} else {
+				new menu.Telnet(this);
+			}
+			this.state = 1;
+		}
 	}
 }
 
