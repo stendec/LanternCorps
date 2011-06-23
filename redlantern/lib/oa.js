@@ -143,7 +143,7 @@ var initialTimeout = function() {
 	if ( !this.proxied && this.state === 0 ) {
 		if ( this.telnet_auto ) {
 			var host = this.Oa.findHost();
-			this.connectTo(host.host, host.port);
+			this.connectTo(host.host, host.port, host.tls);
 		} else {
 			new menu.Telnet(this);
 		}
@@ -227,7 +227,7 @@ var readInitial = function(data) {
 			// Show the menu.
 			if ( this.telnet_auto ) {
 				var host = this.Oa.findHost();
-				this.connectTo(host.host, host.port);
+				this.connectTo(host.host, host.port, host.tls);
 			} else {
 				new menu.Telnet(this);
 			}
@@ -625,7 +625,7 @@ var parseHeader = function parseHeader(stream) {
 	if ( path !== 'menu' ) {
 		var host = stream.Oa.findHost(path, user);
 		if ( host && typeof host !== 'string' ) {
-			stream.connectTo(host.host, host.port);
+			stream.connectTo(host.host, host.port, host.tls);
 			return;
 		} else if ( host ) {
 			stream.message("  You don't have permission to connect to that host.");
@@ -680,12 +680,16 @@ var message = function(data) {
 }
 
 /** Connect to a proxied thingy. */
-var connectTo = function(host, port) {
-	var st = net.Stream(),
+var connectTo = function(host, port, do_tls) {
+	var st = (do_tls ? tls.connect(port, host) : net.Stream()),
 		owner = this;
 	
 	// Speed things up.
-	st.setNoDelay(true);
+	if ( do_tls ) {
+		st.socket.setNoDelay(true);
+	} else {
+		st.setNoDelay(true);
+	}
 	
 	st.on('data',function(data) { owner.message(data); });
 	st.on('end',function(){ owner.end(); });
@@ -696,9 +700,9 @@ var connectTo = function(host, port) {
 	
 	var out = '';
 	if ( host === 'localhost' || host === '127.0.0.1' ) {
-		out = p(9,'Red Lantern',null,' is forwarding you to port '+port+'...\r\n\r\n');
+		out = p(9,'Red Lantern',null,' is forwarding you to port '+port+(do_tls ? ' (TLS)' : '')+'...\r\n\r\n');
 	} else {
-		out = p(9,'Red Lantern',null,' is forwarding you to: '+host,8,':',null,port+'...\r\n\r\n');
+		out = p(9,'Red Lantern',null,' is forwarding you to: '+host,8,':',null,port+(do_tls ? ' (TLS)' : '')+'...\r\n\r\n');
 	}
 	
 	// Show the message.
@@ -706,7 +710,7 @@ var connectTo = function(host, port) {
 	
 	// Try connecting.
 	owner.proxied = st;
-	st.connect(port, host);
+	if ( !do_tls ) { st.connect(port, host); }
 }	
 
 // Exports
