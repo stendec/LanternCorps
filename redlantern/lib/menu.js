@@ -390,7 +390,7 @@ Menu.prototype.process = function(data) {
 		this.telnet.expect_close = true;
 		this.telnet.pop_ih();
 		this.telnet.send_raw('\r\n');
-		this.telnet.stream.connectTo(to[0],parseInt(to[1]));
+		this.telnet.stream.connectTo(to[0],parseInt(to[1]),to[2]);
 		delete this.telnet;
 		return;
 	}
@@ -411,7 +411,7 @@ Menu.prototype.process = function(data) {
 	this.telnet.pop_ih();
 	var h = this.muds[n-1];
 	this.telnet.send_raw('\r\n');
-	this.telnet.stream.connectTo(h.host,h.port);
+	this.telnet.stream.connectTo(h.host,h.port,h.tls);
 	delete this.telnet;
 }
 

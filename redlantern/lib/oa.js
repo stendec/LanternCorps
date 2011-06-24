@@ -56,7 +56,6 @@ var Oa = function Oa(data,ver) {
 	var oa = this;
 	if(data.general.ssl_cert !== undefined &&
 		data.general.ssl_key !== undefined) {
-                this.tls = true;
 
 		sys.log('Oa - TLS enabled.');
 		var tls_options = {
@@ -67,7 +66,17 @@ var Oa = function Oa(data,ver) {
 			tls_options.ca = fs.readFileSync(data.general.ssl_ca);
 		}
 
-		this.server = tls.createServer(tls_options,function(stream,enc_stream){oa.newStream(stream);});
+		this.server = tls.createServer(tls_options,function(stream) {
+			stream.do_tls = true;
+			oa.newStream(stream);
+		});
+
+		// Separate non-TLS policy server
+		this.pserver = net.createServer(function(stream) {
+			stream.policy_only = true;
+			oa.newStream(stream);
+		});
+		this.tls = true;
         } else {
 		this.server = net.createServer(function(stream){oa.newStream(stream);});
         }
@@ -77,6 +86,10 @@ Oa.connections = 0;
 
 /** Set up a new stream. */
 Oa.prototype.newStream = function(stream) {
+	if ( stream.do_tls ) {
+		stream.remoteAddress = stream.socket.remoteAddress;
+	}
+
 	if ( this.data.blacklist.indexOf(stream.remoteAddress) !== -1 ) {
 		sys.log('Oa - Blocked connection from '+stream.remoteAddress);
 		stream.destroy();
@@ -99,7 +112,13 @@ Oa.prototype.newStream = function(stream) {
 	stream.on('close', onClose);
 	
 	// Speed stuff up.
-	stream.setNoDelay(true);
+	if ( stream.do_tls ) {
+		stream.socket.setNoDelay(true);
+		stream.tls_append = '\x00';
+	} else {
+		stream.setNoDelay(true);
+		stream.tls_append = '';
+	}
 	
 	// Bind message
 	stream.message = message.bind(stream);
@@ -111,6 +130,7 @@ Oa.prototype.newStream = function(stream) {
 	stream.state_ws = false;
 	stream.expect_frame = true;
 	stream.buf = '';
+	stream.telnet_auto = this.data.general.telnet_auto;
 	
 	// Set a timeout to bust the menu.
 	stream.timer = setTimeout(initialTimeout.bind(stream),2000);
@@ -121,7 +141,12 @@ var initialTimeout = function() {
 	
 	// Still here? Create a menu.
 	if ( !this.proxied && this.state === 0 ) {
-		new menu.Telnet(this);
+		if ( this.telnet_auto ) {
+			var host = this.Oa.findHost();
+			this.connectTo(host.host, host.port, host.tls);
+		} else {
+			new menu.Telnet(this);
+		}
 		this.state = 1;
 	} else {
 		sys.puts(sys.inspect(this));
@@ -186,23 +211,28 @@ var readInitial = function(data) {
 	this.buf += data.toString('binary');
 	
 	// Check Policy File Request.
-	if ( this.buf === '<policy-file-request/>\x00' ) {
+	if ( !this.do_tls && this.buf === '<policy-file-request/>\x00' ) {
 		sys.log('St.' + this.id + ' - Policy File Request');
 		this.Oa.sendPolicyFileRequest(this);
 		this.destroy();
-	}
-	
-	// Check WebSocket Header
-	else if ( this.buf.substr(0,4) === 'GET ' && this.buf.indexOf('\r\n\r\n') !== -1 ) {
-		parseHeader(this);
-		this.buf = '';
-	}
-	
-	// Is it something else?
-	else if ( this.buf.length > 3 && !(this.buf.substr(0,4) === 'GET ') ) {
-		// Show the menu.
-		new menu.Telnet(this);
-		this.state = 1;
+	} else if ( !this.policy_only ) {
+		// Check WebSocket Header
+		if ( this.buf.substr(0,4) === 'GET ' && this.buf.indexOf('\r\n\r\n') !== -1 ) {
+			parseHeader(this);
+			this.buf = '';
+		}
+		
+		// Is it something else?
+		else if ( this.buf.length > 3 && !(this.buf.substr(0,4) === 'GET ') ) {
+			// Show the menu.
+			if ( this.telnet_auto ) {
+				var host = this.Oa.findHost();
+				this.connectTo(host.host, host.port, host.tls);
+			} else {
+				new menu.Telnet(this);
+			}
+			this.state = 1;
+		}
 	}
 }
 
@@ -266,7 +296,14 @@ Oa.prototype.start = function() {
 	if ( this.data.general.ip ) {
 		msg += ' at ' + this.data.general.ip; }
 	msg += ' on port ' + this.data.general.port;
-	
+
+	if ( this.tls ) {
+		var pmsg = 'Oa - Policy Server Listening';
+		if ( this.data.general.ip ) {
+			pmsg += ' at ' + this.data.general.ip; }
+		pmsg += ' on port ' + (this.data.general.policy_port || 843);
+	}
+
 	// Set the max connections for safety and print out some configuration bits.
 	sys.puts(new Array(80).join('-'));
 	if ( this.data.general.connections !== undefined ) {
@@ -279,6 +316,10 @@ Oa.prototype.start = function() {
 	sys.puts(new Array(80).join('-'));
 	this.server.listen(this.data.general.port, this.data.general.ip);
 	sys.log(msg);
+	if ( this.tls ) {
+		this.pserver.listen((this.data.general.policy_port || 843), this.data.general.ip);
+		sys.log(pmsg);
+	}
 }
 
 /** Check to see if a specific Origin is allowed to connect. */
@@ -540,7 +581,7 @@ var parseHeader = function parseHeader(stream) {
 	
 	// Check for the Host header.
 	if ( headers['Host'] !== undefined ) {
-		stream.loc = 'ws' + (stream.Oa.tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
+		stream.loc = 'ws' + (stream.do_tls ? 's' : '') + '://' + headers['Host'] + '/' + stream.path; }
 	
 	// The Origin header.
 	if ( headers['Origin'] !== undefined ) {
@@ -556,9 +597,6 @@ var parseHeader = function parseHeader(stream) {
 	// Congratulations! It's a baby websocket! Send the handshake.
 	send_handshake(stream);
 	stream.state_ws = true;
-	
-	// Send a banner.
-	stream.Oa.sendBanner(stream);
 	
 	// Try getting a username and password from the path.
 	var user = undefined, path = stream.path;
@@ -587,7 +625,7 @@ var parseHeader = function parseHeader(stream) {
 	if ( path !== 'menu' ) {
 		var host = stream.Oa.findHost(path, user);
 		if ( host && typeof host !== 'string' ) {
-			stream.connectTo(host.host, host.port);
+			stream.connectTo(host.host, host.port, host.tls);
 			return;
 		} else if ( host ) {
 			stream.message("  You don't have permission to connect to that host.");
@@ -595,6 +633,9 @@ var parseHeader = function parseHeader(stream) {
 			return;
 		}
 	}
+	
+	// Send a banner.
+	stream.Oa.sendBanner(stream);
 	
 	// Still here? Show the menu.
 	var tn = new menu.Telnet(stream,user);
@@ -628,7 +669,7 @@ var message = function(data) {
 		if ( typeof data === 'string' ) {
 			this.write(data, 'utf8');
 		} else {
-			this.write(data.toString('binary'),'utf8'); }
+			this.write(data.toString('binary')+this.tls_append,'utf8'); }
 		this.write('\xFF','binary');
 	} else {
 		if ( typeof data === 'string' ) {
@@ -639,12 +680,16 @@ var message = function(data) {
 }
 
 /** Connect to a proxied thingy. */
-var connectTo = function(host, port) {
-	var st = net.Stream(),
+var connectTo = function(host, port, do_tls) {
+	var st = (do_tls ? tls.connect(port, host) : net.Stream()),
 		owner = this;
 	
 	// Speed things up.
-	st.setNoDelay(true);
+	if ( do_tls ) {
+		st.socket.setNoDelay(true);
+	} else {
+		st.setNoDelay(true);
+	}
 	
 	st.on('data',function(data) { owner.message(data); });
 	st.on('end',function(){ owner.end(); });
@@ -655,9 +700,9 @@ var connectTo = function(host, port) {
 	
 	var out = '';
 	if ( host === 'localhost' || host === '127.0.0.1' ) {
-		out = p(9,'Red Lantern',null,' is forwarding you to port '+port+'...\r\n\r\n');
+		out = p(9,'Red Lantern',null,' is forwarding you to port '+port+(do_tls ? ' (TLS)' : '')+'...\r\n\r\n');
 	} else {
-		out = p(9,'Red Lantern',null,' is forwarding you to: '+host,8,':',null,port+'...\r\n\r\n');
+		out = p(9,'Red Lantern',null,' is forwarding you to: '+host,8,':',null,port+(do_tls ? ' (TLS)' : '')+'...\r\n\r\n');
 	}
 	
 	// Show the message.
@@ -665,7 +710,7 @@ var connectTo = function(host, port) {
 	
 	// Try connecting.
 	owner.proxied = st;
-	st.connect(port, host);
+	if ( !do_tls ) { st.connect(port, host); }
 }	
 
 // Exports
